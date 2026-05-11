@@ -1,0 +1,14 @@
+{
+  "name": "panini-2026-sync-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Backend local para sincronizar estados del album Panini 2026 entre plugin y manager.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
