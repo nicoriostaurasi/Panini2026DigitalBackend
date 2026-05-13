@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 
@@ -9,6 +9,7 @@ const dataDir = join(__dirname, "data");
 const logsDir = join(__dirname, "logs");
 const dbPath = join(dataDir, "profiles.json");
 const logPath = join(logsDir, "server.log");
+const managerDir = resolve(process.env.MANAGER_DIR || join(__dirname, "..", "Panini2026DigitalManager"));
 const port = Number(process.env.PORT || 8787);
 const fileLogsEnabled = process.env.FILE_LOGS === "1";
 
@@ -49,7 +50,7 @@ const server = createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
     if (req.method === "GET" && url.pathname === "/health") {
-      return json(res, 200, { ok: true, service: "panini-2026-sync-backend" });
+      return json(res, 200, { ok: true, service: "panini-2026-sync-backend", manager: managerDir });
     }
 
     if (req.method === "GET" && url.pathname === "/api/profiles") {
@@ -186,6 +187,10 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { profile: publicProfile(profile) });
     }
 
+    if (req.method === "GET" || req.method === "HEAD") {
+      return serveManagerAsset(req, res, url);
+    }
+
     return json(res, 404, { error: "not_found" });
   } catch (error) {
     log("request:error", {
@@ -200,7 +205,7 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(port, () => {
-  log("server:start", { port, url: `http://localhost:${port}`, fileLogsEnabled });
+  log("server:start", { port, url: `http://localhost:${port}`, managerDir, fileLogsEnabled });
 });
 
 server.on("error", (error) => {
@@ -320,6 +325,51 @@ function safeQuery(url) {
     entries[key] = key.toLowerCase().includes("token") || key.toLowerCase().includes("password") ? "[redacted]" : value;
   }
   return entries;
+}
+
+async function serveManagerAsset(req, res, url) {
+  const rawPath = url.pathname === "/" ? "/index.html" : url.pathname;
+  const decodedPath = decodeURIComponent(rawPath);
+  const filePath = resolve(managerDir, `.${decodedPath}`);
+  const isInsideManager = filePath === managerDir || filePath.startsWith(`${managerDir}${sep}`);
+
+  if (!isInsideManager) return json(res, 403, { error: "forbidden" });
+
+  try {
+    const fileStat = await stat(filePath);
+    if (!fileStat.isFile()) return json(res, 404, { error: "not_found" });
+    const body = req.method === "HEAD" ? "" : await readFile(filePath);
+    return send(res, 200, body, {
+      "Content-Type": contentTypeFor(filePath),
+      "Cache-Control": cacheControlFor(filePath)
+    });
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return json(res, 404, { error: "not_found" });
+    }
+    throw error;
+  }
+}
+
+function contentTypeFor(filePath) {
+  const types = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".csv": "text/csv; charset=utf-8"
+  };
+  return types[extname(filePath).toLowerCase()] || "application/octet-stream";
+}
+
+function cacheControlFor(filePath) {
+  return extname(filePath).toLowerCase() === ".html" ? "no-store" : "public, max-age=3600";
 }
 
 function log(event, details = {}, level = "info") {
